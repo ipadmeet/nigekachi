@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ニゲカチマップ</title>
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+        .container {
+            max-width: 800px;
+            margin: 20px auto;
+            font-family: Arial, sans-serif;
+        }
+        #report-form, #login-form {
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        /* 🔹右上のブックアイコン */
+        .book-icon {
+            position: fixed;
+            top: 15px;
+            right: 15px;
+            font-size: 28px;
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+    </style>
+</head>
+<body>
+    
+<!-- 🔹右上ブックマーク -->
+<a class="book-icon" href="https://sites.google.com/view/incict-design" target="_blank">📘</a>
+
+<div class="container">
+
+ 
+
+    <!-- 🔹ログインフォーム -->
+    <div id="login-form">
+        <input id="email" type="email" placeholder="メールアドレス" style="width: 90%; margin-bottom:10px;"><br>
+        <input id="password" type="password" placeholder="パスワード" style="width: 90%; margin-bottom:10px;"><br>
+        <button onclick="login()">ログイン</button>
+        <button onclick="logout()">ログアウト</button>
+        <p id="login-status"></p>
+    </div>
+
+    <!-- 🔹投稿フォーム -->
+    <div id="report-form" style="display: none;">
+        <label for="report-datetime">日時:</label><br>
+        <input type="datetime-local" id="report-datetime" style="margin-bottom: 10px; width: 90%;"><br>
+
+        <label for="description">状況の詳細:</label><br>
+        <textarea id="description" rows="3" cols="50" style="width: 90%;"></textarea><br><br>
+
+        <button onclick="submitReport()">投稿する</button>
+    </div>
+
+    <div id="map"></div>
+</div>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyB_ft6Nsv511VwGh73Peljdkhvc4cT1PK8",
+        authDomain: "danger-e17d4.firebaseapp.com",
+        projectId: "danger-e17d4",
+        storageBucket: "danger-e17d4.firebasestorage.app",
+        messagingSenderId: "671800740218",
+        appId: "1:671800740218:web:a95e9750fbf79905ea2ec3"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    let map;
+    let selectedLocation = null;
+    let tempMarker = null;
+
+    // 🔹ログイン状態監視
+    auth.onAuthStateChanged((user) => {
+        if (user) {
+            document.getElementById("report-form").style.display = "block";
+            document.getElementById("login-status").textContent = "ログイン中";
+        } else {
+            document.getElementById("report-form").style.display = "none";
+            document.getElementById("login-status").textContent = "投稿できるのはニゲカチのメンバーだけです。ニゲカチのメンバーになっていただける方は「本」マークからお問合せください。または、危険情報をお問合せよりお伝えください。";
+        }
+    });
+
+    function login() {
+        const email = document.getElementById("email").value;
+        const password = document.getElementById("password").value;
+        auth.signInWithEmailAndPassword(email, password)
+            .catch(() => alert("ログイン失敗"));
+    }
+
+    function logout() {
+        auth.signOut();
+    }
+
+    function initMap() {
+        const initialPos = { lat: 36.3658, lng: 140.4764 };
+
+        map = new google.maps.Map(document.getElementById("map"), {
+            center: initialPos,
+            zoom: 16,
+        });
+
+        // 地図クリック → ピン設置
+        map.addListener("click", (e) => {
+            if (!auth.currentUser) {
+                alert("投稿にはログインが必要です");
+                return;
+            }
+
+            selectedLocation = {
+                lat: e.latLng.lat(),
+                lng: e.latLng.lng()
+            };
+
+            if (tempMarker) tempMarker.setMap(null);
+
+            tempMarker = new google.maps.Marker({
+                position: selectedLocation,
+                map: map,
+                icon: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+            });
+        });
+
+        listenForReports();
+    }
+
+    function listenForReports() {
+        db.collection("reports").onSnapshot((snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+                const data = change.doc.data();
+                if (change.type === "added") {
+                    const marker = new google.maps.Marker({
+                        position: new google.maps.LatLng(data.latitude, data.longitude),
+                        map: map,
+                        icon: "http://maps.google.com/mapfiles/ms/icons/red-dot.png"
+                    });
+
+                    const t = data.reportTimestamp ?
+                        new Date(data.reportTimestamp.toDate()).toLocaleString() : "不明";
+
+                    const infoWindow = new google.maps.InfoWindow({
+                        content: `
+                            <h3>危険箇所</h3>
+                            <strong>日時:</strong> ${t}<br>
+                            <strong>詳細:</strong> ${data.description}<br>
+                            <strong>投稿者:</strong> ${data.username}
+                        `
+                    });
+
+                    marker.addListener("click", () => {
+                        infoWindow.open(map, marker);
+                    });
+                }
+            });
+        });
+    }
+
+    function submitReport() {
+        if (!auth.currentUser) return alert("ログインしてください");
+        if (!selectedLocation) return alert("地図をクリックして位置を選択してください");
+        if (!description.value.trim()) return alert("状況を入力してください");
+
+        const d = new Date(document.getElementById("report-datetime").value);
+
+        db.collection("reports").add({
+            latitude: selectedLocation.lat,
+            longitude: selectedLocation.lng,
+            description: description.value,
+            username: "ニゲカチ",
+            reportTimestamp: firebase.firestore.Timestamp.fromDate(d),
+            created: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        alert("投稿しました");
+        description.value = "";
+        if (tempMarker) tempMarker.setMap(null);
+        selectedLocation = null;
+    }
+</script>
+
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC3WivvfQ9Y-qkXpjXwWXGGEXGKDOPhvMw&callback=initMap"></script>
+
+</body>
+</html>
